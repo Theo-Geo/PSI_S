@@ -54,12 +54,24 @@ function copy_grid(grid)
         grid.r,
         copy(grid.Vp),
         copy(grid.Vs),
+        copy(grid.ε),
+        copy(grid.δ),
+        copy(grid.n1),
+        copy(grid.n2),
+        copy(grid.n3),
+        copy(grid.vecef1),
+        copy(grid.vecef2),
+        copy(grid.vecef3),
         grid.fw_level,
         grid.nnodes,
         grid.nxny,
         grid.dmin,
         grid.perturbed,
         copy(grid.σ),
+        copy(grid.estatics),
+        copy(grid.sstatics),
+        copy(grid.n2sr),    
+        copy(grid.sr2n),
     )
 end
 
@@ -237,16 +249,19 @@ function instance_grid(observables, evtsta, raytracer, IP; aniso_status=false)
     fw_influence = -gr.fw_level:gr.fw_level
     nx, ny, nz = gr.nnodes[1], gr.nnodes[2], gr.nnodes[3]
     local_nodes = [raytracer.local_evts, raytracer.local_stats]
+    isstat = Bool[] # -- is the new node a station?
     for i_set in eachindex(local_nodes)
         for id in local_nodes[i_set]
             if i_set == 1
                 sr = evtsta.evts[id]
                 x_sr, y_sr, z_sr = geo_to_cartesian(sr.lat, sr.lon, R + sr.depth)
                 lon_sr, lat_sr, rad_sr = sr.lon, sr.lat, R + sr.depth
+                push!(isstat,false)
             elseif i_set == 2
                 sr = evtsta.stas[id]
                 x_sr, y_sr, z_sr = geo_to_cartesian(sr.lat, sr.lon, R + sr.elevation)
                 lon_sr, lat_sr, rad_sr = sr.lon, sr.lat, R + sr.elevation
+                push!(isstat,true)
             end
             ind = closest_point(gr,x_sr,y_sr,z_sr)
             # -- add sr to grid
@@ -330,25 +345,42 @@ function instance_grid(observables, evtsta, raytracer, IP; aniso_status=false)
     end
 
     for i in eachindex(gr.r)
-        gr.Vp[i] = ref_V1D(gr.r[i],refm[:,[1,2]])
-        gr.Vs[i] = ref_V1D(gr.r[i],refm[:,[1,3]])
-        if i > (gr.nnodes[1]*gr.nnodes[2]*gr.nnodes[3])
-            continue
-        end
+        h = 0.0
         if raytracer.topography_status
             lon, lat = gr.φ[i], gr.θ[i]
-            # latid, lonid = v_dist_val(lat,θp), v_dist_val(lon,φp)
             latid = fast_v_dist(lat,θmin,dθ)
             lonid = fast_v_dist(lon,φmin,dφ)
-            h = raytracer.topography[latid,lonid]
-            if (gr.r[i]-R) > raytracer.topography[latid,lonid]
-                gr.Vp[i], gr.Vs[i] = 0.0, 0.0
-            else
-                gr.Vp[i] = ref_V1D(gr.r[i]-h,refm[:,[1,2]])
-                gr.Vs[i] = ref_V1D(gr.r[i]-h,refm[:,[1,3]])
+            IP.RayTracingInit.velmod_shift && (h = raytracer.topography[latid,lonid])
+            not_stat = true 
+            ((i > (nnodes[1]*nnodes[2]*nnodes[3])) && isstat[i-(nnodes[1]*nnodes[2]*nnodes[3])]) && (not_stat = false)
+            if (gr.r[i]-R) > raytracer.topography[latid,lonid] && not_stat
+                gr.Vp[i], gr.Vs[i] = 0.01, 0.01 # do not force Vp=Vs=0 at stations (small numerical offesets from topography).
+                continue
             end
         end
+        gr.Vp[i] = ref_V1D(gr.r[i]-h,refm[:,[1,2]])
+        gr.Vs[i] = ref_V1D(gr.r[i]-h,refm[:,[1,3]])
     end
+    # for i in eachindex(gr.r)
+    #     gr.Vp[i] = ref_V1D(gr.r[i],refm[:,[1,2]])
+    #     gr.Vs[i] = ref_V1D(gr.r[i],refm[:,[1,3]])
+    #     if i > (gr.nnodes[1]*gr.nnodes[2]*gr.nnodes[3])
+    #         continue
+    #     end
+    #     if raytracer.topography_status
+    #         lon, lat = gr.φ[i], gr.θ[i]
+    #         # latid, lonid = v_dist_val(lat,θp), v_dist_val(lon,φp)
+    #         latid = fast_v_dist(lat,θmin,dθ)
+    #         lonid = fast_v_dist(lon,φmin,dφ)
+    #         h = raytracer.topography[latid,lonid]
+    #         if (gr.r[i]-R) > raytracer.topography[latid,lonid]
+    #             gr.Vp[i], gr.Vs[i] = 0.0, 0.0
+    #         else
+    #             gr.Vp[i] = ref_V1D(gr.r[i]-h,refm[:,[1,2]])
+    #             gr.Vs[i] = ref_V1D(gr.r[i]-h,refm[:,[1,3]])
+    #         end
+    #     end
+    # end
 
     for iobs in eachindex(observables.Obs)
         obs = observables.Obs[iobs]
@@ -404,9 +436,10 @@ function instance_velocity_grid(observables,evtsta,raytracer, IP, chains)
     lims = IP.lims
     refm = readdlm(IP.velocitymodel,' ',Float64,'\n')   # -- reads the reference 1D velocity model
 
-    vel_nnodes, time_steps = 64000, 50
-
-    nnodes, upscale = upscaling(raytracer,vel_nnodes)
+    # vel_nnodes, time_steps = 105000, 20
+    vel_nnodes, time_steps = [raytracer.nnodes[1], raytracer.nnodes[2], raytracer.nnodes[3]], 20
+    nnodes, upscale = [vel_nnodes[1],vel_nnodes[2],vel_nnodes[3]], 1
+    # nnodes, upscale = upscaling(raytracer,vel_nnodes)
     nn1, nn2, nn3 = nnodes[1], nnodes[2], nnodes[3]
     θmin, θmax = (lims.lat[1]), (lims.lat[2])
     φmin, φmax = (lims.lon[1]), (lims.lon[2])
@@ -438,7 +471,8 @@ function instance_velocity_grid(observables,evtsta,raytracer, IP, chains)
         range(rmin,rmax,length=nn3)
     )
 
-    tp = range(tmin,tmax,length=time_steps)
+    dt = (tmax - tmin) / time_steps
+    tp = range(tmin + dt/2, tmax - dt/2, length=time_steps)
     for frame in eachindex(tp)
         push!(Vp,Float64[])
         push!(Vs,Float64[])
@@ -466,7 +500,7 @@ function instance_velocity_grid(observables,evtsta,raytracer, IP, chains)
         gr.σ[iobs] = obs.noise_guess
     end
 
-    fill_4Dgrid(gr,chains,IP)
+    @time fill_4Dgrid(gr,chains,IP)
 
     return gr
 

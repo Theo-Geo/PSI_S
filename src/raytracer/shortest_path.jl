@@ -12,12 +12,15 @@ struct OutGridConst
     r::Vector{Float64}
     Vp::Vector{Float64}
     Vs::Vector{Float64}
-    # ε::Vector{Float64}
-    # δ::Vector{Float64}
+    ε::Vector{Float64}
+    δ::Vector{Float64}
     # γ::Vector{Float64}
-    # n1::Vector{Float64}
-    # n2::Vector{Float64}
-    # n3::Vector{Float64}
+    n1::Vector{Float64}
+    n2::Vector{Float64}
+    n3::Vector{Float64}
+    vecef1::Vector{Float64}
+    vecef2::Vector{Float64}
+    vecef3::Vector{Float64}
     fw_level::Int64
     nnodes::Vector{Int64}
     nxny::Int64
@@ -121,7 +124,7 @@ function raytracing_dijkstra(gr, observables, LocalRaysManager, paths, evtsta, I
         for phase in phases 
             phase_visited .= visited
             # D[phase] = dijkstra_interval(grid,source_node,phase,phase_visited,lowmen[t_id];aniso_status=aniso_status)
-            D[phase] = dijkstra(grid,source_node,phase,phase_visited;aniso_status=aniso_status)
+            @time D[phase] = dijkstra(grid,source_node,phase,phase_visited;aniso_status=aniso_status)
         end
         if !relocation_status
             get_path(D,grid,source,receivers,LocalRaysManager,paths,rev,evtsta)
@@ -305,25 +308,49 @@ function fill_grid(grid, MarkovChains, evtsta, observables, IP; aniso_status = f
     end
     print("\nnoise: ",grid.σ)
 
+    if aniso_status
+        gridε = grid.ε
+        gridδ = grid.δ
+        gridn1 = grid.n1
+        gridn2 = grid.n2
+        gridn3 = grid.n3
+        gridvecef1 = grid.vecef1
+        gridvecef2 = grid.vecef2
+        gridvecef3 = grid.vecef3
+    else
+        gridε = zeros(Float64,length(grid.Vp))
+        gridδ = zeros(Float64,length(grid.Vp))
+        gridn1 = zeros(Float64,length(grid.Vp))
+        gridn2 = zeros(Float64,length(grid.Vp))
+        gridn3 = zeros(Float64,length(grid.Vp))
+        gridvecef1 = zeros(Float64,length(grid.Vp))
+        gridvecef2 = zeros(Float64,length(grid.Vp))
+        gridvecef3 = zeros(Float64,length(grid.Vp))
+    end
+
+
     # -- save grid
-outgrid = OutGridConst(
-    grid.x,
-    grid.y,
-    grid.z,
-    grid.θ,
-    grid.φ,
-    grid.r,
-    grid.Vp,
-    grid.Vs,
-    # grid.ε,
-    # grid.δ,
-    # grid.n1,
-    # grid.n2,
-    # grid.n3,
-    grid.fw_level,
-    grid.nnodes,
-    grid.nnodes[1]*grid.nnodes[2]
-)
+    outgrid = OutGridConst(
+        grid.x,
+        grid.y,
+        grid.z,
+        grid.θ,
+        grid.φ,
+        grid.r,
+        grid.Vp,
+        grid.Vs,
+        gridε,
+        gridδ,
+        gridn1,
+        gridn2,
+        gridn3,
+        gridvecef1,
+        gridvecef2,
+        gridvecef3,
+        grid.fw_level,
+        grid.nnodes,
+        grid.nnodes[1]*grid.nnodes[2]
+    )
 save("grid_model.jld","grid",outgrid)
 end
 
@@ -333,7 +360,7 @@ function fill_4Dgrid(grid, MarkovChains, IP)
     fieldslist = MarkovChains[begin][end].fieldslist
     nchains = length(MarkovChains)
     tracing_fields = ["Vp","dlnVp","Vs","dlnVs","Vp2Vs","dlnVp2Vs","η"]
-    
+    chain_models = Int64(round(IP.RayTracingInit.sub_its / IP.MCS.saveint))
     for frame in eachindex(grid.tp)
         timestep = grid.tp[frame]
         points[4,:] .= timestep 
@@ -351,41 +378,42 @@ function fill_4Dgrid(grid, MarkovChains, IP)
         for chain in eachindex(MarkovChains)
             [(vfields[i] .= 0.0) for i in eachindex(vfields)]
             MarkovChain = MarkovChains[chain]
-            fieldid = 0
-            if MarkovChain[end].T[1] != 1
-                continue
-            end
-            nsamples += 1
-            for i in eachindex(MarkovChain[end].fields)
-                voronoi = MarkovChain[end].fields[i]
-                fieldname = voronoi.fieldname
-                (fieldname ∉ tracing_fields) && continue
-                fieldid += 1
-                if check_1dim(voronoi)
-                    inds = NN_interpolation(points_radial, voronoi.r[:,begin:voronoi.n[1]])
-                else
-                    inds = NN_interpolation(points, voronoi.c[:,begin:voronoi.n[1]])
+            for model in MarkovChain[end-chain_models+1:end]
+                if model.T[1] != 1
+                    continue
                 end
-                for j in eachindex(grid.x)
-                    x, y, z = grid.x[j], grid.y[j], grid.z[j]
-                    r = sqrt(x^2+y^2+z^2)
-                    θ = asin(z/r)
-                    φ = atan(y,x)
-                    ((r < grid.rp[begin]) && (r = grid.rp[begin]))
-                    ((r > grid.rp[end]) && (r = grid.rp[end]))
-                    if IP.MCS.squeezing
-                        if voronoi.slims[3][1] <= r <= voronoi.slims[3][2]
-                            vfields[fieldid][j] = voronoi.v[inds[j]]
-                        else
-                            vfields[fieldid][j] = voronoi.ref_value
-                        end
+                nsamples += 1
+                for fieldid in eachindex(model.fields)
+                    voronoi = model.fields[fieldid]
+                    fieldname = voronoi.fieldname
+                    (fieldname ∉ tracing_fields) && continue
+                    # fieldid += 1
+                    if check_1dim(voronoi)
+                        inds = NN_interpolation(points_radial, voronoi.r[:,begin:voronoi.n[1]])
                     else
-                        vfields[fieldid][j] = voronoi.v[inds[j]]
+                        inds = NN_interpolation(points, voronoi.c[:,begin:voronoi.n[1]])
                     end
+                    for j in eachindex(grid.x)
+                        x, y, z = grid.x[j], grid.y[j], grid.z[j]
+                        r = sqrt(x^2+y^2+z^2)
+                        θ = asin(z/r)
+                        φ = atan(y,x)
+                        ((r < grid.rp[begin]) && (r = grid.rp[begin]))
+                        ((r > grid.rp[end]) && (r = grid.rp[end]))
+                        if IP.MCS.squeezing
+                            if voronoi.slims[3][1] <= r <= voronoi.slims[3][2]
+                                vfields[fieldid][j] = voronoi.v[inds[j]]
+                            else
+                                vfields[fieldid][j] = voronoi.ref_value
+                            end
+                        else
+                            vfields[fieldid][j] = voronoi.v[inds[j]]
+                        end
+                    end
+                    active_fields[fieldname] = fieldid
                 end
-                active_fields[fieldname] = fieldid
+                tracing_vfield(Vp1D, Vs1D, grid.Vp[frame], grid.Vs[frame], vfields, active_fields)
             end
-            tracing_vfield(Vp1D, Vs1D, grid.Vp[frame], grid.Vs[frame], vfields, active_fields)
         end
         @. grid.Vp[frame] = 1 / (grid.Vp[frame] / nsamples)   # -- calculated from average slowness (stored in gr.Vp / samples)
         @. grid.Vs[frame] = 1 / (grid.Vs[frame] / nsamples)
@@ -395,8 +423,13 @@ end
 function interpolate_4Dfield(grid, velocity_4D_field, evtsta, source, node2node)
     T0 = evtsta.evts[source].T0
     frame = v_dist_ind(T0,velocity_4D_field.tp)
+    ntot = grid.nnodes[1]*grid.nnodes[2]*grid.nnodes[3]
     for ind in eachindex(grid.Vp)
-        vel_ind = node2node[ind]
+        if ind > ntot
+            vel_ind = node2node[ind]
+        else
+            vel_ind = ind 
+        end
         grid.Vp[ind] = velocity_4D_field.Vp[frame][vel_ind]
         grid.Vs[ind] = velocity_4D_field.Vs[frame][vel_ind]
     end
@@ -481,8 +514,8 @@ function aniso_fields(grid,MarkovChains,IP,MCS)
         grid.n3[i] = b[3]/nb
 
         grid.ε[i] = sqrt(b[1]^2+b[2]^2+b[3]^2)
-        #grid.δ[i] = grid.ε[i]
-        grid.δ[i] = grid.ε[i]*(p1*grid.ε[i] + p2)/(grid.ε[i] + q1)
+        grid.δ[i] = grid.ε[i]
+        #grid.δ[i] = grid.ε[i]*(p1*grid.ε[i] + p2)/(grid.ε[i] + q1)
         if crit < DB_th
             grid.ε[i] = 0.0
             grid.δ[i] = 0.0
@@ -537,11 +570,11 @@ function aniso_fields(grid,MarkovChains,IP,MCS)
     end
 
     @. grid.ε = grid.ε / nsamples
-    #@. grid.δ = grid.δ / nsamples
+    @. grid.δ = grid.δ / nsamples
     # -- elliptical anisotropy
     #@. grid.δ = grid.ε
     # -- low-aspect ratio (100) cracks anisotropy
-     @. grid.δ = grid.ε*(p1*grid.ε + p2)/(grid.ε + q1)
+    # @. grid.δ = grid.ε*(p1*grid.ε + p2)/(grid.ε + q1)
 
     return true
 

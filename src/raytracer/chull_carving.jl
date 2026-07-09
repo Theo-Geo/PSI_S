@@ -4,40 +4,48 @@ function gnomonic_proj(proj,θ,φ,θmid,φmid)
     proj[2] = R*(cos(φmid)*sin(φ) - sin(φmid)*cos(φ)*cos(θ-θmid))/cos_Δ
 end
 
+function carve_grid(visited,gr,source,receivers,IP)
 
-function carve_grid(visited,grid,source,receivers)
-    θmid = 0.5*(grid.θ[begin]+grid.θ[end])
-    φmid = 0.5*(grid.φ[begin]+grid.φ[end])
-    p = Vector{Vector{Float64}}()
-
-    proj = zeros(Float64,2)
-    gnomonic_proj(proj,grid.θ[source],grid.φ[source],θmid,φmid)
-    push!(p,proj)
-    for receiver in receivers
-        rproj = zeros(Float64,2)
-        gnomonic_proj(rproj,grid.θ[receiver],grid.φ[receiver],θmid,φmid)
-        push!(p,rproj)
-    end
-
+    radius = 5
     npoints = 8
-    radius = 3
-    radius_φ = deg2rad(1.0 / (111.319 * cos(grid.φ[source])) * radius)
+    radius_φ = deg2rad(1.0 / (111.319 * cos(gr.θ[source])) * radius)
     radius_θ = deg2rad(1.0 / 110.574 * radius)
     dΩ = 2*pi/npoints
     Ω = 0.0
+
+    θmin, θmax = (IP.lims.lat[1]), (IP.lims.lat[2])
+    φmin, φmax = (IP.lims.lon[1]), (IP.lims.lon[2])
+    rmin, rmax = R + IP.lims.depth[1], R + IP.lims.depth[2]
+
+    θmid = 0.5*(θmin+θmax)
+    φmid = 0.5*(φmin+φmax)
+    p = Vector{Vector{Float64}}()
+    for i in 1:(1+length(receivers))*(npoints+1)
+        push!(p,zeros(Float64,2))
+    end
+
+    pnode = 0
+    pnode += 1
+    proj = p[pnode]
+    gnomonic_proj(proj,gr.θ[source],gr.φ[source],θmid,φmid)
+    for receiver in receivers
+        pnode += 1
+        proj = p[pnode]
+        gnomonic_proj(proj,gr.θ[receiver],gr.φ[receiver],θmid,φmid)
+    end
     for i in 1:npoints
-        proj = zeros(Float64,2)
-        θ_new = grid.θ[source] + radius_θ * sin(Ω)
-        φ_new = grid.φ[source] + radius_φ * cos(Ω)
+        pnode += 1
+        proj = p[pnode]
+        θ_new = gr.θ[source] + radius_θ * sin(Ω)
+        φ_new = gr.φ[source] + radius_φ * cos(Ω)
         gnomonic_proj(proj,θ_new,φ_new,θmid,φmid)
-        push!(p,proj)
         for receiver in receivers
-            proj = zeros(Float64,2)
-            radius_φ = deg2rad(1.0 / (111.319 * cos(grid.φ[receiver])) * radius)
-            θ_new = grid.θ[receiver] + radius_θ * sin(Ω)
-            φ_new = grid.φ[receiver] + radius_φ * cos(Ω)
+            pnode += 1
+            proj = p[pnode]
+            radius_φ = deg2rad(1.0 / (111.319 * cos(gr.θ[receiver])) * radius)
+            θ_new = gr.θ[receiver] + radius_θ * sin(Ω)
+            φ_new = gr.φ[receiver] + radius_φ * cos(Ω)
             gnomonic_proj(proj,θ_new,φ_new,θmid,φmid)
-            push!(p,proj)
         end
         Ω += dΩ
     end
@@ -46,38 +54,45 @@ function carve_grid(visited,grid,source,receivers)
     vhull = VPolygon(hull)
 
     gproj = zeros(Float64,2)
-    for i in eachindex(grid.θ)
-        gnomonic_proj(gproj,grid.θ[i],grid.φ[i],θmid,φmid)
-        if !(element(Singleton(gproj)) ∈ vhull) 
-            (visited[i] = true)
+    dθ, dφ = (θmax-θmin)/(gr.nnodes[1]-1), (φmax-φmin)/(gr.nnodes[2]-1)
+    for i in 1:gr.nnodes[1], j in 1:gr.nnodes[2]
+        θnode, φnode = θmin + dθ * (i-1), φmin + dφ * (j-1)
+        gnomonic_proj(gproj,θnode,φnode,θmid,φmid)
+        inside = (element(Singleton(gproj)) ∈ vhull) 
+        if !inside 
+            for k in 1:gr.nnodes[3]
+                nn = LinearIndex(gr, i, j, k)
+                (visited[nn] = true)
+            end
         end
     end
 
-    # fig,ax = PyPlot.subplots()
+
     # xs = Float64[]
     # ys = Float64[]
     # gproj = zeros(Float64,2)
-    # for i in eachindex(grid.x)[1:1:end]
+    # for i in eachindex(gr.x)
     #     if !visited[i]
-    #         gnomonic_proj(gproj,grid.θ[i],grid.φ[i],θmid,φmid)
+    #         gnomonic_proj(gproj,gr.θ[i],gr.φ[i],θmid,φmid)
     #         push!(xs,gproj[1])
     #         push!(ys,gproj[2])
     #     end
     # end
-    # ax.scatter(xs,ys,s=1,color="black")
-    # for i in eachindex(p)
-    #     if i <= (length(receivers) + 1)
-    #         ax.scatter(p[i][1],p[i][2],s=30,color="red")
-    #     else
-    #         ax.scatter(p[i][1],p[i][2],s=20,color="orange")
-    #     end
+    # h = scatter(xs,ys,markersize=1,color=:black,legend=false,aspect_ratio=:equal)
+    # for i in eachindex(p)[length(receivers)+2:end]
+    #     scatter!([p[i][1]],[p[i][2]],markersize=3,color=:orange,legend=false)
     # end
+    # for i in eachindex(p)[2:length(receivers)+1]
+    #     scatter!([p[i][1]],[p[i][2]],markersize=4,marker=:star5,color=:blue,legend=false)
+    # end
+    # scatter!([p[1][1]],[p[1][2]],markersize=4,marker=:utriangle,color=:red,legend=false)
     # for i in eachindex(hull)
     #     if i < length(hull)
-    #         ax.plot([hull[i][1],hull[i+1][1]],[hull[i][2],hull[i+1][2]])
+    #         plot!([hull[i][1],hull[i+1][1]],[hull[i][2],hull[i+1][2]],c=:violet)
     #     else
-    #         ax.plot([hull[i][1],hull[1][1]],[hull[i][2],hull[1][2]])
+    #         plot!([hull[i][1],hull[1][1]],[hull[i][2],hull[1][2]],c=:violet)
     #     end
     # end 
-    # PyPlot.show()
+    # display(h)
+    # readline()
 end
