@@ -383,11 +383,12 @@ function fill_4Dgrid(grid, MarkovChains, IP)
                     continue
                 end
                 nsamples += 1
-                for fieldid in eachindex(model.fields)
-                    voronoi = model.fields[fieldid]
+                fieldid = 0
+                for i in eachindex(model.fields)
+                    voronoi = model.fields[i]
                     fieldname = voronoi.fieldname
                     (fieldname ∉ tracing_fields) && continue
-                    # fieldid += 1
+                    fieldid += 1
                     if check_1dim(voronoi)
                         inds = NN_interpolation(points_radial, voronoi.r[:,begin:voronoi.n[1]])
                     else
@@ -417,6 +418,7 @@ function fill_4Dgrid(grid, MarkovChains, IP)
         end
         @. grid.Vp[frame] = 1 / (grid.Vp[frame] / nsamples)   # -- calculated from average slowness (stored in gr.Vp / samples)
         @. grid.Vs[frame] = 1 / (grid.Vs[frame] / nsamples)
+        # @show maximum(grid.Vp[frame]), minimum(grid.Vp[frame])
     end
 end
 
@@ -425,6 +427,9 @@ function interpolate_4Dfield(grid, velocity_4D_field, evtsta, source, node2node)
     frame = v_dist_ind(T0,velocity_4D_field.tp)
     ntot = grid.nnodes[1]*grid.nnodes[2]*grid.nnodes[3]
     for ind in eachindex(grid.Vp)
+        if (grid.Vp[ind] == 0.01) && (grid.Vs[ind] == 0.01)
+            continue 
+        end
         if ind > ntot
             vel_ind = node2node[ind]
         else

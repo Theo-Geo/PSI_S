@@ -341,13 +341,13 @@ function build_rays(paths,rays,observables,evtsta,LocalRaysManager,IP,refm;first
 
         nnodes =  IP.RayTracingInit.nnodes
         φmin, θmin = IP.lims.lon[1], IP.lims.lat[1]
-        dφ, dθ = (IP.lims.lon[2]-IP.lims.lon[1])/nnodes[2], (IP.lims.lat[2]-IP.lims.lat[1])/nnodes[1]
+        dφ, dθ = (IP.lims.lon[2]-IP.lims.lon[1])/(nnodes[2]-1), (IP.lims.lat[2]-IP.lims.lat[1])/(nnodes[1]-1)
         for l in eachindex(rads)
             h = 0
             if topography_status && IP.RayTracingInit.velmod_shift
                 lon, lat = atan(y[l],x[l]), asin(z[l]/sqrt(x[l]^2+y[l]^2+z[l]^2))
-                latid = fast_v_dist(lat,θmin,dθ)
-                lonid = fast_v_dist(lon,φmin,dφ)
+                latid = fast_v_dist(lat,θmin,dθ,nnodes[1])
+                lonid = fast_v_dist(lon,φmin,dφ,nnodes[2])
                 h = LocalRaysManager.topography[latid,lonid]
             end
             push!(vps,ref_V1D(rads[l]-h,refm[:,[1,2]]))

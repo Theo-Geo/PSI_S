@@ -85,6 +85,8 @@ function instance_grid(observables, evtsta, raytracer, IP; aniso_status=false)
     φmin, φmax = (lims.lon[1]), (lims.lon[2])
     rmin, rmax = R + lims.depth[1], R + lims.depth[2]
 
+    # perturb = false
+
     x = Vector{Float64}()
     y = Vector{Float64}()
     z = Vector{Float64}()
@@ -348,39 +350,19 @@ function instance_grid(observables, evtsta, raytracer, IP; aniso_status=false)
         h = 0.0
         if raytracer.topography_status
             lon, lat = gr.φ[i], gr.θ[i]
-            latid = fast_v_dist(lat,θmin,dθ)
-            lonid = fast_v_dist(lon,φmin,dφ)
+            latid = fast_v_dist(lat,θmin,dθ,gr.nnodes[1])
+            lonid = fast_v_dist(lon,φmin,dφ,gr.nnodes[2])
             IP.RayTracingInit.velmod_shift && (h = raytracer.topography[latid,lonid])
             not_stat = true 
             ((i > (nnodes[1]*nnodes[2]*nnodes[3])) && isstat[i-(nnodes[1]*nnodes[2]*nnodes[3])]) && (not_stat = false)
             if (gr.r[i]-R) > raytracer.topography[latid,lonid] && not_stat
-                gr.Vp[i], gr.Vs[i] = 0.01, 0.01 # do not force Vp=Vs=0 at stations (small numerical offesets from topography).
+                gr.Vp[i], gr.Vs[i] = 0.01, 0.01 # do not force Vp=Vs=0 at stations (small numerical offests from topography).
                 continue
             end
         end
         gr.Vp[i] = ref_V1D(gr.r[i]-h,refm[:,[1,2]])
         gr.Vs[i] = ref_V1D(gr.r[i]-h,refm[:,[1,3]])
     end
-    # for i in eachindex(gr.r)
-    #     gr.Vp[i] = ref_V1D(gr.r[i],refm[:,[1,2]])
-    #     gr.Vs[i] = ref_V1D(gr.r[i],refm[:,[1,3]])
-    #     if i > (gr.nnodes[1]*gr.nnodes[2]*gr.nnodes[3])
-    #         continue
-    #     end
-    #     if raytracer.topography_status
-    #         lon, lat = gr.φ[i], gr.θ[i]
-    #         # latid, lonid = v_dist_val(lat,θp), v_dist_val(lon,φp)
-    #         latid = fast_v_dist(lat,θmin,dθ)
-    #         lonid = fast_v_dist(lon,φmin,dφ)
-    #         h = raytracer.topography[latid,lonid]
-    #         if (gr.r[i]-R) > raytracer.topography[latid,lonid]
-    #             gr.Vp[i], gr.Vs[i] = 0.0, 0.0
-    #         else
-    #             gr.Vp[i] = ref_V1D(gr.r[i]-h,refm[:,[1,2]])
-    #             gr.Vs[i] = ref_V1D(gr.r[i]-h,refm[:,[1,3]])
-    #         end
-    #     end
-    # end
 
     for iobs in eachindex(observables.Obs)
         obs = observables.Obs[iobs]
@@ -471,6 +453,23 @@ function instance_velocity_grid(observables,evtsta,raytracer, IP, chains)
         range(rmin,rmax,length=nn3)
     )
 
+    if length(θp) > 1 
+        θp1, θp2 = θp[1], θp[2] 
+    else
+        θp1, θp2 = θp[1], θp[1]
+    end
+    if length(φp) > 1 
+        φp1, φp2 = φp[1], φp[2]
+    else
+        φp1, φp2 = φp[1], φp[2]
+    end
+    if length(rp) > 1 
+        rp1, rp2 = rp[1], rp[2]
+    else
+        rp1, rp2 = rp[1], rp[1]
+    end
+
+    dθ, dφ, dr = θp2 - θp1, φp2 - φp1, rp2 - rp1
     dt = (tmax - tmin) / time_steps
     tp = range(tmin + dt/2, tmax - dt/2, length=time_steps)
     for frame in eachindex(tp)
@@ -487,8 +486,25 @@ function instance_velocity_grid(observables,evtsta,raytracer, IP, chains)
         push!(gr.y,yt)
         push!(gr.z,zt)
         push!(gr.r,rp[k])
-        Vp_ref = ref_V1D(rp[k],refm[:,[1,2]])
-        Vs_ref = ref_V1D(rp[k],refm[:,[1,3]])
+        # Vp_ref = ref_V1D(rp[k],refm[:,[1,2]])
+        # Vs_ref = ref_V1D(rp[k],refm[:,[1,3]])
+        # for frame in eachindex(tp)
+        #     push!(gr.Vp[frame],Vp_ref)
+        #     push!(gr.Vs[frame],Vs_ref)
+        # end
+        h = 0.0
+        if raytracer.topography_status
+            lon, lat = φp[j], θp[i]
+            latid = fast_v_dist(lat,θmin,dθ,nn1)
+            lonid = fast_v_dist(lon,φmin,dφ,nn2)
+            IP.RayTracingInit.velmod_shift && (h = raytracer.topography[latid,lonid])
+            # if (gr.r[i]-R) > raytracer.topography[latid,lonid] 
+            #     gr.Vp[i], gr.Vs[i] = 0.01, 0.01 # do not force Vp=Vs=0 at stations (small numerical offesets from topography).
+            #     continue
+            # end
+        end
+        Vp_ref = ref_V1D(rp[k]-h,refm[:,[1,2]])
+        Vs_ref = ref_V1D(rp[k]-h,refm[:,[1,3]])
         for frame in eachindex(tp)
             push!(gr.Vp[frame],Vp_ref)
             push!(gr.Vs[frame],Vs_ref)
@@ -548,11 +564,11 @@ function evtt_extremes(evtsta)
     return minimum(T0s), maximum(T0s)
 end
 
-function fast_v_dist(t,tmin,dt)
+function fast_v_dist(t,tmin,dt,N)
         t = t-tmin
         i = floor(t/dt) + 1
         p = i + floor((t-dt*(i-1))/(dt/2))
-    return Int64(p)
+    return Int64(clamp(p, 1, N))
 end
 
 function mask_topography(grid,visited)
