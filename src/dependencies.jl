@@ -26,6 +26,7 @@ using ReadVTK
 using Distributions
 using SpecialFunctions
 using StatsBase # Used for weighted medians/means
+using TauP
 
 # Global Constants
 const R = 6371.0
